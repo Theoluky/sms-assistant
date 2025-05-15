@@ -43,15 +43,57 @@ def receive_sms():
     return Response(status=200)
 
 def handle_message(text):
-    return ("You said: " + text)
-    # # your existing logic...
-    # text = text.lower()
-    # if text.startswith("weather"):
-    #     return "Weather data here..."
-    # elif text.startswith("search"):
-    #     return "Search result here..."
-    # else:
-    #     return "Sorry, I didn't understand. Try: weather <city> or search <query>."
+    # your existing logic...
+    text = text.lower()
+    if text.startswith("weather"):
+        return "Weather data here..."
+    elif text.startswith("search"):
+        return "Search result here..."
+    else:
+        return "Sorry, I didn't understand. Try: weather <city> or search <query>."
+    
+def get_weather_data(location):
+    """
+    location: either "lat,lon" (e.g. "39.7392,-105.9903")
+              or a simple place name for geocoding (e.g. "Denver,CO").
+    """
+    # 1. Parse latitude & longitude
+    if "," in location:
+        lat_str, lon_str = location.split(",", 1)
+        lat, lon = lat_str.strip(), lon_str.strip()
+    else:
+        # For simplicity, use Open-Meteo's geocoding endpoint (no key)
+        geo = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": location, "count": 1}
+        ).json()
+        if not geo.get("results"):
+            return f"Could not geocode '{location}'."
+        lat = geo["results"][0]["latitude"]
+        lon = geo["results"][0]["longitude"]
+
+    # 2. Get forecast URL from NWS
+    pt = requests.get(f"https://api.weather.gov/points/{lat},{lon}")
+    if pt.status_code != 200:
+        return "Error contacting NWS."
+    forecast_url = pt.json()["properties"]["forecast"]
+
+    # 3. Fetch the forecast
+    forecast = requests.get(forecast_url).json()
+    periods = forecast.get("properties", {}).get("periods", [])
+    if not periods:
+        return "No forecast available."
+
+    # 4. Build a short summary (today’s daytime and nighttime)
+    today = []
+    for p in periods[:2]:  # usually [0]=Today Day, [1]=Tonight
+        name = p["name"]        # e.g. "Today", "Tonight"
+        temp = p["temperature"] # numeric
+        unit = p["temperatureUnit"]
+        short = p["shortForecast"]  # e.g. "Partly Sunny"
+        today.append(f"{name}: {short}, {temp}°{unit}")
+
+    return " / ".join(today)
 
 def send_sms(to_number, body):
     url = "https://api.telnyx.com/v2/messages"
