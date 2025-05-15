@@ -46,54 +46,68 @@ def handle_message(text):
     # your existing logic...
     text = text.lower()
     if text.startswith("weather"):
-        return "Weather data here..."
+        # e.g. "weather 39.7392,-105.9903" or "weather denver,co"
+        parts = text.split(" ", 1)
+        loc = parts[1] if len(parts) > 1 else ""
+        if not loc:
+            return "Usage: weather <lat,lon> or weather <City,State>"
+        return get_weather_nws(loc)
     elif text.startswith("search"):
         return "Search result here..."
     else:
         return "Sorry, I didn't understand. Try: weather <city> or search <query>."
     
-def get_weather_data(location):
+def get_weather_nws(location, days=3):
     """
-    location: either "lat,lon" (e.g. "39.7392,-105.9903")
-              or a simple place name for geocoding (e.g. "Denver,CO").
+    Fetch a multi-day weather outlook from NOAA NWS.
+    location: "lat,lon" (e.g. "39.7392,-105.9903") or "City,State"
+    days: how many future days to include (default 3)
     """
-    # 1. Parse latitude & longitude
-    if "," in location:
-        lat_str, lon_str = location.split(",", 1)
-        lat, lon = lat_str.strip(), lon_str.strip()
+    # 1. Turn location into lat/lon
+    if "," in location and all(c.isdigit() or c in ".-," for c in location.replace(" ", "")):
+        lat, lon = [s.strip() for s in location.split(",", 1)]
     else:
-        # For simplicity, use Open-Meteo's geocoding endpoint (no key)
+        # geocode via Open-Meteo free endpoint
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
             params={"name": location, "count": 1}
         ).json()
         if not geo.get("results"):
-            return f"Could not geocode '{location}'."
+            return f"Could not find '{location}'."
         lat = geo["results"][0]["latitude"]
         lon = geo["results"][0]["longitude"]
 
-    # 2. Get forecast URL from NWS
+    # 2. Ask NWS for the point metadata
     pt = requests.get(f"https://api.weather.gov/points/{lat},{lon}")
     if pt.status_code != 200:
-        return "Error contacting NWS."
+        return "Error fetching location info."
     forecast_url = pt.json()["properties"]["forecast"]
 
-    # 3. Fetch the forecast
-    forecast = requests.get(forecast_url).json()
-    periods = forecast.get("properties", {}).get("periods", [])
+    # 3. Fetch the forecast periods
+    resp = requests.get(forecast_url)
+    if resp.status_code != 200:
+        return "Error fetching forecast."
+    periods = resp.json().get("properties", {}).get("periods", [])
     if not periods:
-        return "No forecast available."
+        return "No forecast data."
 
-    # 4. Build a short summary (today’s daytime and nighttime)
-    today = []
-    for p in periods[:2]:  # usually [0]=Today Day, [1]=Tonight
-        name = p["name"]        # e.g. "Today", "Tonight"
-        temp = p["temperature"] # numeric
-        unit = p["temperatureUnit"]
-        short = p["shortForecast"]  # e.g. "Partly Sunny"
-        today.append(f"{name}: {short}, {temp}°{unit}")
+    # 4. Build outlook: day+night for the next `days` days
+    outlook = []
+    # NOAA periods come in alternating Day / Night starting with current period
+    # We skip the current (which may be night/day depending on time) and grab the next 2*days periods
+    # If you want to include "Today" use periods[0:2*days], otherwise periods[1:2*days+1]
+    slice_start = 0  # including current period
+    slice_end = min(len(periods), 2 * days + slice_start)
+    for p in periods[slice_start:slice_end]:
+        name = p["name"]               # e.g. "Today", "Tonight", "Tuesday", "Tuesday Night"
+        temp = p["temperature"]        # integer
+        unit = p["temperatureUnit"]    # e.g. "F"
+        short = p["shortForecast"]     # e.g. "Partly Sunny"
+        outlook.append(f"{name}: {short}, {temp}°{unit}")
 
-    return " / ".join(today)
+    # 5. Join into one SMS-friendly string
+    # Separate entries with " | " – adjust if too long for your SMS limits
+    return " | ".join(outlook)
 
 def send_sms(to_number, body):
     url = "https://api.telnyx.com/v2/messages"
