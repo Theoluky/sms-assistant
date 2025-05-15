@@ -1,6 +1,7 @@
 from flask import Flask, request, Response
 import requests
 import os
+import re
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -57,56 +58,63 @@ def handle_message(text):
     else:
         return "Sorry, I didn't understand. Try: weather <city> or search <query>."
     
+# Pre-compile a regex for “lat,lon” detection
+LATLON_RE = re.compile(r"""
+    ^\s*                            # optional leading space
+    (?P<lat>[-+]?\d+(\.\d+)?)       # latitude: integer or decimal
+    \s*,\s*                         # comma separator (allow spaces)
+    (?P<lon>[-+]?\d+(\.\d+)?)       # longitude: integer or decimal
+    \s*$                            # optional trailing space
+""", re.VERBOSE)
+
 def get_weather_nws(location, days=3):
     """
     Fetch a multi-day weather outlook from NOAA NWS.
-    location: "lat,lon" (e.g. "39.7392,-105.9903") or "City,State"
+    location: either "lat,lon" (e.g. "39.7392,-105.9903")
+              or a place name (e.g. "Estes Park,CO", "Denver, CO")
     days: how many future days to include (default 3)
     """
-    # 1. Turn location into lat/lon
-    if "," in location and all(c.isdigit() or c in ".-," for c in location.replace(" ", "")):
-        lat, lon = [s.strip() for s in location.split(",", 1)]
+    # 1. Determine if the input is numeric lat,lon
+    m = LATLON_RE.match(location)
+    if m:
+        lat = m.group("lat")
+        lon = m.group("lon")
     else:
-        # geocode via Open-Meteo free endpoint
+        # Treat as place name → geocode via Open-Meteo
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
             params={"name": location, "count": 1}
         ).json()
         if not geo.get("results"):
-            return f"Could not find '{location}'."
+            return f"Could not find location '{location}'."
         lat = geo["results"][0]["latitude"]
         lon = geo["results"][0]["longitude"]
 
     # 2. Ask NWS for the point metadata
     pt = requests.get(f"https://api.weather.gov/points/{lat},{lon}")
     if pt.status_code != 200:
-        return "Error fetching location info."
+        return "Error fetching location info from NWS."
     forecast_url = pt.json()["properties"]["forecast"]
 
     # 3. Fetch the forecast periods
     resp = requests.get(forecast_url)
     if resp.status_code != 200:
-        return "Error fetching forecast."
+        return "Error fetching forecast from NWS."
     periods = resp.json().get("properties", {}).get("periods", [])
     if not periods:
-        return "No forecast data."
+        return "No forecast data available."
 
     # 4. Build outlook: day+night for the next `days` days
     outlook = []
-    # NOAA periods come in alternating Day / Night starting with current period
-    # We skip the current (which may be night/day depending on time) and grab the next 2*days periods
-    # If you want to include "Today" use periods[0:2*days], otherwise periods[1:2*days+1]
-    slice_start = 0  # including current period
-    slice_end = min(len(periods), 2 * days + slice_start)
-    for p in periods[slice_start:slice_end]:
-        name = p["name"]               # e.g. "Today", "Tonight", "Tuesday", "Tuesday Night"
+    slice_end = min(len(periods), 2 * days)
+    for p in periods[:slice_end]:
+        name = p["name"]               # e.g. "Today", "Tonight", "Tuesday", ...
         temp = p["temperature"]        # integer
         unit = p["temperatureUnit"]    # e.g. "F"
         short = p["shortForecast"]     # e.g. "Partly Sunny"
         outlook.append(f"{name}: {short}, {temp}°{unit}")
 
     # 5. Join into one SMS-friendly string
-    # Separate entries with " | " – adjust if too long for your SMS limits
     return " | ".join(outlook)
 
 def send_sms(to_number, body):
