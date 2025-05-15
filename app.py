@@ -17,12 +17,14 @@ def receive_sms():
     data = request.json
     from_number = data.get("from")
     body = data.get("text", "").strip()
+    print(data)
 
-    if from_number not in AUTHORIZED_NUMBERS:
-        return Response(status=403)
+    # if from_number not in AUTHORIZED_NUMBERS:
+    #     return Response(status=403)
 
     reply = handle_message(body)
-    send_sms(from_number, reply)
+    # send_sms(from_number, reply)
+    print("reply")
     return Response(status=200)
 
 def handle_message(text):
