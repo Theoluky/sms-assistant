@@ -44,15 +44,12 @@ def receive_sms():
     return Response(status=200)
 
 def handle_message(text):
-    # your existing logic...
-    text = text.lower()
-    if text.startswith("weather"):
-        # e.g. "weather 39.7392,-105.9903" or "weather denver,co"
+    text = text.strip()
+    if text.lower().startswith("weather"):
         parts = text.split(" ", 1)
-        loc = parts[1] if len(parts) > 1 else ""
-        if not loc:
+        if len(parts) < 2:
             return "Usage: weather <lat,lon> or weather <City,State>"
-        return get_weather_nws(loc)
+        return get_weather_nws(parts[1], days=3)
     elif text.startswith("search"):
         return "Search result here..."
     else:
@@ -67,54 +64,70 @@ LATLON_RE = re.compile(r"""
     \s*$                            # optional trailing space
 """, re.VERBOSE)
 
-def get_weather_nws(location, days=3):
-    """
-    Fetch a multi-day weather outlook from NOAA NWS.
-    location: either "lat,lon" (e.g. "39.7392,-105.9903")
-              or a place name (e.g. "Estes Park,CO", "Denver, CO")
-    days: how many future days to include (default 3)
-    """
-    # 1. Determine if the input is numeric lat,lon
+def geocode(location: str):
+    """Return (lat, lon) for a place name or numeric pair, or (None, None)."""
+    # A) If it's literally "lat,lon", parse it
     m = LATLON_RE.match(location)
     if m:
-        lat = m.group("lat")
-        lon = m.group("lon")
-    else:
-        # Treat as place name → geocode via Open-Meteo
-        geo = requests.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": location, "count": 1}
-        ).json()
-        if not geo.get("results"):
-            return f"Could not find location '{location}'."
-        lat = geo["results"][0]["latitude"]
-        lon = geo["results"][0]["longitude"]
+        return m.group("lat"), m.group("lon")
 
-    # 2. Ask NWS for the point metadata
-    pt = requests.get(f"https://api.weather.gov/points/{lat},{lon}")
+    # B) Try Open-Meteo geocoder
+    try:
+        resp = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": location, "count": 1},
+            timeout=5
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("results"):
+            r = data["results"][0]
+            return r["latitude"], r["longitude"]
+    except Exception:
+        # silent fallback
+        pass
+
+    # C) Fallback to Nominatim (OpenStreetMap)
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": location, "format": "json", "limit": 1},
+            headers={"User-Agent": "sms-weather-bot/1.0"},
+            timeout=5
+        )
+        resp.raise_for_status()
+        results = resp.json()
+        if results:
+            return results[0]["lat"], results[0]["lon"]
+    except Exception:
+        pass
+
+    return None, None
+
+def get_weather_nws(location: str, days: int = 3) -> str:
+    """Fetch a multi-day forecast from NOAA NWS given a place name or lat,lon."""
+    lat, lon = geocode(location)
+    if not lat or not lon:
+        return f"❌ Could not geocode '{location}'."
+
+    # 2. Get forecast endpoint
+    pt = requests.get(f"https://api.weather.gov/points/{lat},{lon}", timeout=5)
     if pt.status_code != 200:
-        return "Error fetching location info from NWS."
+        return "⚠️ NWS lookup failed."
     forecast_url = pt.json()["properties"]["forecast"]
 
-    # 3. Fetch the forecast periods
-    resp = requests.get(forecast_url)
-    if resp.status_code != 200:
-        return "Error fetching forecast from NWS."
-    periods = resp.json().get("properties", {}).get("periods", [])
+    # 3. Fetch periods
+    fx = requests.get(forecast_url, timeout=5)
+    if fx.status_code != 200:
+        return "⚠️ NWS forecast fetch failed."
+    periods = fx.json().get("properties", {}).get("periods", [])
     if not periods:
-        return "No forecast data available."
+        return "❌ No forecast data."
 
-    # 4. Build outlook: day+night for the next `days` days
+    # 4. Build the outlook
     outlook = []
-    slice_end = min(len(periods), 2 * days)
-    for p in periods[:slice_end]:
-        name = p["name"]               # e.g. "Today", "Tonight", "Tuesday", ...
-        temp = p["temperature"]        # integer
-        unit = p["temperatureUnit"]    # e.g. "F"
-        short = p["shortForecast"]     # e.g. "Partly Sunny"
-        outlook.append(f"{name}: {short}, {temp}°{unit}")
-
-    # 5. Join into one SMS-friendly string
+    for p in periods[: 2 * days]:
+        outlook.append(f"{p['name']}: {p['shortForecast']}, {p['temperature']}°{p['temperatureUnit']}")
     return " | ".join(outlook)
 
 def send_sms(to_number, body):
