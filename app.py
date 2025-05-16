@@ -3,6 +3,7 @@ import requests
 import os
 from dotenv import load_dotenv
 from weather_services import get_weather_nws
+from search_services import get_search_summary
 load_dotenv()
 
 app = Flask(__name__)
@@ -49,8 +50,12 @@ def handle_message(text):
         if len(parts) < 2:
             return "Usage: weather <lat,lon> or weather <City,State>"
         return get_weather_nws(parts[1], days=3)
-    elif text.startswith("search"):
-        return "Search result here..."
+        # New search command:
+    if text.lower().startswith("search") or text.lower().startswith("google"):
+        parts = text.split(" ", 1)
+        if len(parts) < 2:
+            return "Usage: search <keywords>"
+        return get_search_summary(parts[1])
     else:
         return "Sorry, I didn't understand. Try: weather <city> or search <query>."
 
