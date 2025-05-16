@@ -40,7 +40,7 @@ def receive_sms():
     # Now handle the message
     reply = handle_message(message_body)
     print(reply)
-    # send_sms(from_number, reply)
+    send_sms(from_number, reply)
     return Response(status=200)
 
 def handle_message(text):
