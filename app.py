@@ -15,6 +15,9 @@ TEXTBELT_KEY = os.environ.get("TEXTBELT_KEY")
 
 
 # print(TELNYX_API_KEY, TELNYX_MESSAGING_PROFILE_ID, AUTHORIZED_NUMBERS)
+@app.route("/health")
+def health(): return "OK", 200
+
 
 @app.route("/sms", methods=["POST"])
 def receive_sms():
