@@ -77,9 +77,9 @@ def send_sms(to_number, message):
     result = resp.json()
     if not result.get("success"):
         # log the error for debugging
-        app.logger.error("Textbelt error: %s", result.get("error", resp.text))
+        print("Textbelt error: %s", result.get("error", resp.text))
     else:
-        app.logger.info("Textbelt sent to %s, id=%s", to_number, result.get("textId"))
+        print("Textbelt sent to %s, id=%s", to_number, result.get("textId"))
 
 if __name__ == "__main__":
     # for local dev you might use app.run(debug=True)
