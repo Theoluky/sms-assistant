@@ -66,11 +66,12 @@ def send_sms(to_number, message):
     Sends outbound SMS via Textbelt’s pay-per-text API.
     Replies will come from a shared Textbelt number.
     """
+    full_msg = f"SMS Assistant: {message}"
     resp = requests.post(
         "https://textbelt.com/text",
         data={
             "phone": to_number,
-            "message": message,
+            "message": full_msg,
             "key": TEXTBELT_KEY,
         }
     )
