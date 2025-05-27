@@ -10,7 +10,9 @@ app = Flask(__name__)
 
 TELNYX_API_KEY = os.environ.get("TELNYX_API_KEY")
 TELNYX_MESSAGING_PROFILE_ID = os.environ.get("TELNYX_MESSAGING_PROFILE_ID")
-AUTHORIZED_NUMBERS = os.environ.get("AUTHORIZED_NUMBER")  # replace this
+AUTHORIZED_NUMBERS = os.environ.get("AUTHORIZED_NUMBER") 
+TEXTBELT_KEY = os.environ.get("TEXTBELT_KEY")
+
 
 # print(TELNYX_API_KEY, TELNYX_MESSAGING_PROFILE_ID, AUTHORIZED_NUMBERS)
 
@@ -59,20 +61,25 @@ def handle_message(text):
     else:
         return "Sorry, I didn't understand. Try: weather <city> or search <query>."
 
-def send_sms(to_number, body):
-    url = "https://api.telnyx.com/v2/messages"
-    headers = {
-        "Authorization": f"Bearer {TELNYX_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    json_data = {
-        "from": "YOUR_TELNYX_NUMBER",          # e.g. "+17179379708"
-        "to": to_number,
-        "text": body,
-        "messaging_profile_id": TELNYX_MESSAGING_PROFILE_ID
-    }
-    resp = requests.post(url, headers=headers, json=json_data)
-    app.logger.info("Sent SMS to %s: %s %s", to_number, resp.status_code, resp.text)
+def send_sms(to_number, message):
+    """
+    Sends outbound SMS via Textbelt’s pay-per-text API.
+    Replies will come from a shared Textbelt number.
+    """
+    resp = requests.post(
+        "https://textbelt.com/text",
+        data={
+            "phone": to_number,
+            "message": message,
+            "key": TEXTBELT_KEY,
+        }
+    )
+    result = resp.json()
+    if not result.get("success"):
+        # log the error for debugging
+        app.logger.error("Textbelt error: %s", result.get("error", resp.text))
+    else:
+        app.logger.info("Textbelt sent to %s, id=%s", to_number, result.get("textId"))
 
 if __name__ == "__main__":
     # for local dev you might use app.run(debug=True)
